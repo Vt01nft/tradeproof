@@ -48,6 +48,17 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function proofHash(input) {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return `0x${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 function getFirstQuote(data, symbol) {
   const item = data?.data?.[symbol];
   return Array.isArray(item) ? item[0] : item;
@@ -163,6 +174,58 @@ createServer(async (request, response) => {
   }
 
   if (url.pathname !== "/api/market") {
+    if (url.pathname === "/api/trust/quote") {
+      const hasCredentials = Boolean(
+        (process.env.TRUST_WALLET_CLIENT_ID ?? process.env.VITE_TRUST_WALLET_CLIENT_ID) &&
+          (process.env.TRUST_WALLET_CLIENT_SECRET ?? process.env.VITE_TRUST_WALLET_CLIENT_SECRET),
+      );
+      const asset = url.searchParams.get("asset") ?? "BNB";
+      const decision = url.searchParams.get("decision") ?? "NO_TRADE";
+      const price = toNumber(url.searchParams.get("price"), 0);
+      const notionalUsd = decision === "BUY" ? 250 : 0;
+      const createdAt = new Date().toISOString();
+
+      sendJson(response, 200, {
+        mode: hasCredentials ? "quote-ready" : "credentials-missing",
+        provider: "Trust Wallet Agent Kit",
+        action: decision === "BUY" ? "prepare_quote_only_swap" : "execution_blocked_by_constitution",
+        asset,
+        chain: "BNB Smart Chain",
+        notionalUsd,
+        estimatedUnits: price > 0 && notionalUsd > 0 ? Number((notionalUsd / price).toFixed(6)) : 0,
+        userControl: "No private keys are held by the agent; user keeps final signing control.",
+        policy: ["quote-only", "no-custody", "constitution-gated", "no-autosign"],
+        proofId: proofHash(`trust:${asset}:${decision}:${price}:${createdAt}`),
+        createdAt,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/agent/profile") {
+      const hasAgentKey = Boolean(process.env.BNB_AGENT_PRIVATE_KEY ?? process.env.VITE_BNB_AGENT_PRIVATE_KEY);
+      const receiptHash = url.searchParams.get("receiptHash") ?? "pending";
+      const createdAt = new Date().toISOString();
+
+      sendJson(response, 200, {
+        mode: hasAgentKey ? "profile-ready" : "credentials-missing",
+        provider: "BNB AI Agent SDK",
+        standard: "ERC-8004 / ERC-8183-ready metadata",
+        name: "TradeProof",
+        description: "Constitution-bound AI trading agent for accountable strategy evaluation.",
+        capabilities: [
+          "live_market_strategy_evaluation",
+          "constitution_gated_trade_receipts",
+          "quote_only_execution_preparation",
+          "agentic_strategy_job_metadata",
+        ],
+        supportedJobs: ["strategy-evaluation", "risk-court-review", "quote-proof-preparation"],
+        receiptHash,
+        profileProof: proofHash(`bnb-agent:tradeproof:${receiptHash}:${createdAt}`),
+        createdAt,
+      });
+      return;
+    }
+
     sendJson(response, 404, { error: "Not found" });
     return;
   }

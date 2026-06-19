@@ -72,3 +72,30 @@ export interface IntegrationHealth {
   hasTrustWalletCredentials: boolean;
   hasBnbAgentKey: boolean;
 }
+
+export interface TrustWalletProof {
+  mode: "quote-ready" | "credentials-missing";
+  provider: string;
+  action: string;
+  asset: AssetSymbol;
+  chain: string;
+  notionalUsd: number;
+  estimatedUnits: number;
+  userControl: string;
+  policy: string[];
+  proofId: string;
+  createdAt: string;
+}
+
+export interface BnbAgentProof {
+  mode: "profile-ready" | "credentials-missing";
+  provider: string;
+  standard: string;
+  name: string;
+  description: string;
+  capabilities: string[];
+  supportedJobs: string[];
+  receiptHash: string;
+  profileProof: string;
+  createdAt: string;
+}

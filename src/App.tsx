@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BadgeCheck,
@@ -14,7 +14,7 @@ import {
 import "./App.css";
 import { defaultConstitution, marketScenarios, sponsorIntegrations } from "./data/marketScenarios";
 import { generateReceipt } from "./lib/strategy";
-import type { Constitution, IntegrationHealth, MarketFeed, MarketSignal } from "./types";
+import type { BnbAgentProof, Constitution, IntegrationHealth, MarketFeed, MarketSignal, TrustWalletProof } from "./types";
 
 function Logo() {
   return (
@@ -69,6 +69,8 @@ function App() {
     hasTrustWalletCredentials: false,
     hasBnbAgentKey: false,
   });
+  const [trustProof, setTrustProof] = useState<TrustWalletProof | null>(null);
+  const [bnbProof, setBnbProof] = useState<BnbAgentProof | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<MarketSignal>(marketScenarios[0]);
   const [constitution, setConstitution] = useState<Constitution>(defaultConstitution);
   const visibleScenarios = marketFeed.assets.length ? marketFeed.assets : marketScenarios;
@@ -115,6 +117,16 @@ function App() {
     }
   }
 
+  function useDemoScenarios() {
+    setMarketFeed({
+      mode: "fallback",
+      generatedAt: new Date().toISOString(),
+      message: "Deterministic demo scenarios are active for video walkthroughs and judge review.",
+      assets: marketScenarios,
+    });
+    setSelectedAsset(marketScenarios[0]);
+  }
+
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => {
       void refreshMarketFeed();
@@ -123,8 +135,41 @@ function App() {
     return () => window.clearTimeout(refreshTimer);
   }, []);
 
+  const refreshSponsorProofs = useCallback(async () => {
+    try {
+      const trustResponse = await fetch(
+        `/api/trust/quote?asset=${receipt.asset}&decision=${receipt.decision}&price=${selectedAsset.price}`,
+      );
+      const agentResponse = await fetch(`/api/agent/profile?receiptHash=${receipt.receiptHash}`);
+
+      setTrustProof((await trustResponse.json()) as TrustWalletProof);
+      setBnbProof((await agentResponse.json()) as BnbAgentProof);
+    } catch {
+      setTrustProof(null);
+      setBnbProof(null);
+    }
+  }, [receipt.asset, receipt.decision, receipt.receiptHash, selectedAsset.price]);
+
+  useEffect(() => {
+    const proofTimer = window.setTimeout(() => {
+      void refreshSponsorProofs();
+    }, 0);
+
+    return () => window.clearTimeout(proofTimer);
+  }, [refreshSponsorProofs]);
+
   function exportReceipt() {
-    const payload = JSON.stringify(receipt, null, 2);
+    const payload = JSON.stringify(
+      {
+        ...receipt,
+        sponsorProofs: {
+          trustWallet: trustProof,
+          bnbAgent: bnbProof,
+        },
+      },
+      null,
+      2,
+    );
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -240,6 +285,9 @@ function App() {
             <h2>Accountable strategy generation for self-custody AI agents</h2>
           </div>
           <div className="action-row">
+            <button className="secondary-action" onClick={useDemoScenarios}>
+              Demo Mode
+            </button>
             <button className="secondary-action" onClick={refreshMarketFeed} disabled={isRefreshing}>
               <Activity size={18} />
               {isRefreshing ? "Refreshing" : "Refresh CMC"}
@@ -360,11 +408,13 @@ function App() {
             </div>
             <div className="proof-block">
               <strong>Trust Wallet</strong>
-              <p>{receipt.trustWalletAction}</p>
+              <p>{trustProof ? `${trustProof.action} on ${trustProof.chain}. ${trustProof.userControl}` : receipt.trustWalletAction}</p>
+              {trustProof ? <code>{trustProof.proofId}</code> : null}
             </div>
             <div className="proof-block">
               <strong>BNB Agent</strong>
-              <p>{receipt.bnbAgentIdentity}</p>
+              <p>{bnbProof ? `${bnbProof.standard}: ${bnbProof.description}` : receipt.bnbAgentIdentity}</p>
+              {bnbProof ? <code>{bnbProof.profileProof}</code> : null}
             </div>
             <div className="source-tags">
               {receipt.cmcSources.map((source) => (
