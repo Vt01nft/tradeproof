@@ -74,14 +74,9 @@ function buildCourt(signal: MarketSignal, checks: Record<string, boolean>): Cour
     100,
   );
   const skepticScore = clamp(Math.round(100 - signal.rsi * 0.8 - signal.fundingPressure * 45), 0, 100);
-  const riskScore = Math.round(
-    (Number(checks.liquidityOk) +
-      Number(checks.volatilityOk) +
-      Number(checks.drawdownOk) +
-      Number(checks.positionSizeOk) +
-      Number(checks.newsRiskOk)) *
-      20,
-  );
+  const passedRiskChecks = Object.values(checks).filter(Boolean).length;
+  const riskScore = Math.round((passedRiskChecks / Object.keys(checks).length) * 100);
+  const allRiskChecksPass = Object.values(checks).every(Boolean);
 
   return [
     {
@@ -104,10 +99,10 @@ function buildCourt(signal: MarketSignal, checks: Record<string, boolean>): Cour
     },
     {
       role: "Risk Officer",
-      vote: riskScore >= 80 ? "approve" : "reject",
+      vote: allRiskChecksPass ? "approve" : "reject",
       score: riskScore,
       summary:
-        riskScore >= 80
+        allRiskChecksPass
           ? "The trade stays inside liquidity, volatility, drawdown, and sizing limits."
           : "The constitution blocks execution until risk constraints improve.",
     },

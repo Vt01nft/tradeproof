@@ -15,6 +15,7 @@ export interface MarketSignal {
   liquidityScore: number;
   fundingPressure: number;
   newsRisk: number;
+  dataSource: "demo-scenario" | "live-cmc-rest";
 }
 
 export interface Constitution {
@@ -56,4 +57,11 @@ export interface SponsorIntegration {
   name: string;
   status: SponsorStatus;
   role: string;
+}
+
+export interface MarketFeed {
+  mode: "live" | "fallback";
+  generatedAt: string;
+  message: string;
+  assets: MarketSignal[];
 }

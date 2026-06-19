@@ -91,10 +91,10 @@ Option 1: API key.
 4. Add it to a local `.env` file:
 
 ```bash
-VITE_CMC_API_KEY=your_key_here
+CMC_API_KEY=your_key_here
 ```
 
-CoinMarketCap's public API page says keyless trial routes are available for first tests, and authenticated access uses `X-CMC_PRO_API_KEY`.
+TradeProof reads this key from the local API proxy, not from browser code. CoinMarketCap's public API page says keyless trial routes are available for first tests, and authenticated access uses `X-CMC_PRO_API_KEY`.
 
 Option 2: Agent Hub.
 
@@ -109,8 +109,13 @@ For hackathon speed, start with the API key path and use Agent Hub/MCP in the su
 
 ```bash
 npm install
-npm run dev
+npm run dev:full
 ```
+
+This starts:
+
+- Vite frontend at `http://127.0.0.1:5173`
+- Local CMC proxy at `http://127.0.0.1:8787`
 
 Build check:
 
@@ -123,10 +128,10 @@ npm run build
 Create `.env` when keys are available:
 
 ```bash
-VITE_CMC_API_KEY=
-VITE_TRUST_WALLET_CLIENT_ID=
-VITE_TRUST_WALLET_CLIENT_SECRET=
-VITE_BNB_AGENT_PRIVATE_KEY=
+CMC_API_KEY=
+TRUST_WALLET_CLIENT_ID=
+TRUST_WALLET_CLIENT_SECRET=
+BNB_AGENT_PRIVATE_KEY=
 ```
 
 Never commit real secrets.

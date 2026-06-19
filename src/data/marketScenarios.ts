@@ -22,6 +22,7 @@ export const marketScenarios: MarketSignal[] = [
     liquidityScore: 91,
     fundingPressure: 0.18,
     newsRisk: 19,
+    dataSource: "demo-scenario",
   },
   {
     asset: "CAKE",
@@ -34,6 +35,7 @@ export const marketScenarios: MarketSignal[] = [
     liquidityScore: 74,
     fundingPressure: 0.41,
     newsRisk: 35,
+    dataSource: "demo-scenario",
   },
   {
     asset: "USDT",
@@ -46,6 +48,7 @@ export const marketScenarios: MarketSignal[] = [
     liquidityScore: 99,
     fundingPressure: 0.01,
     newsRisk: 7,
+    dataSource: "demo-scenario",
   },
 ];
 

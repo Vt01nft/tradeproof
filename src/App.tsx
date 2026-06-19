@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BadgeCheck,
@@ -14,7 +14,7 @@ import {
 import "./App.css";
 import { defaultConstitution, marketScenarios, sponsorIntegrations } from "./data/marketScenarios";
 import { generateReceipt } from "./lib/strategy";
-import type { Constitution, MarketSignal } from "./types";
+import type { Constitution, MarketFeed, MarketSignal } from "./types";
 
 function Logo() {
   return (
@@ -56,10 +56,53 @@ function CheckRow({ label, ok }: { label: string; ok: boolean }) {
 }
 
 function App() {
+  const [marketFeed, setMarketFeed] = useState<MarketFeed>({
+    mode: "fallback",
+    generatedAt: new Date().toISOString(),
+    message: "Using deterministic demo market scenarios until the CMC proxy responds.",
+    assets: marketScenarios,
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<MarketSignal>(marketScenarios[0]);
   const [constitution, setConstitution] = useState<Constitution>(defaultConstitution);
+  const visibleScenarios = marketFeed.assets.length ? marketFeed.assets : marketScenarios;
+  const sponsorStack = sponsorIntegrations.map((integration) =>
+    integration.name === "CoinMarketCap Agent Hub"
+      ? { ...integration, status: marketFeed.mode === "live" ? ("live-ready" as const) : ("pending-key" as const) }
+      : integration,
+  );
   const receipt = useMemo(() => generateReceipt(selectedAsset, constitution), [selectedAsset, constitution]);
   const approvedCount = receipt.courtVotes.filter((vote) => vote.vote === "approve").length;
+
+  async function refreshMarketFeed() {
+    setIsRefreshing(true);
+
+    try {
+      const response = await fetch("/api/market");
+      const feed = (await response.json()) as MarketFeed;
+      const nextAssets = feed.assets.length ? feed.assets : marketScenarios;
+
+      setMarketFeed({ ...feed, assets: nextAssets });
+      setSelectedAsset((current) => nextAssets.find((asset) => asset.asset === current.asset) ?? nextAssets[0]);
+    } catch {
+      setMarketFeed({
+        mode: "fallback",
+        generatedAt: new Date().toISOString(),
+        message: "CMC proxy is offline. Using deterministic demo market scenarios.",
+        assets: marketScenarios,
+      });
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    const refreshTimer = window.setTimeout(() => {
+      void refreshMarketFeed();
+    }, 0);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, []);
 
   function exportReceipt() {
     const payload = JSON.stringify(receipt, null, 2);
@@ -146,7 +189,7 @@ function App() {
             <h2>Sponsor Stack</h2>
           </div>
           <div className="sponsor-list">
-            {sponsorIntegrations.map((integration) => (
+            {sponsorStack.map((integration) => (
               <div className="sponsor" key={integration.name}>
                 <div>
                   <strong>{integration.name}</strong>
@@ -175,21 +218,35 @@ function App() {
             <p className="eyebrow">BNB Hack: Track 2 + Track 1-ready demo</p>
             <h2>Accountable strategy generation for self-custody AI agents</h2>
           </div>
-          <button className="primary-action" onClick={exportReceipt}>
-            <FileJson size={18} />
-            Export Receipt
-          </button>
+          <div className="action-row">
+            <button className="secondary-action" onClick={refreshMarketFeed} disabled={isRefreshing}>
+              <Activity size={18} />
+              {isRefreshing ? "Refreshing" : "Refresh CMC"}
+            </button>
+            <button className="primary-action" onClick={exportReceipt}>
+              <FileJson size={18} />
+              Export Receipt
+            </button>
+          </div>
         </header>
 
+        <section className={`feed-banner ${marketFeed.mode}`}>
+          <div>
+            <strong>{marketFeed.mode === "live" ? "Live CoinMarketCap feed" : "Fallback demo feed"}</strong>
+            <p>{marketFeed.message}</p>
+          </div>
+          <span>{new Date(marketFeed.generatedAt).toLocaleTimeString()}</span>
+        </section>
+
         <nav className="asset-tabs" aria-label="Market scenarios">
-          {marketScenarios.map((scenario) => (
+          {visibleScenarios.map((scenario) => (
             <button
               className={scenario.asset === selectedAsset.asset ? "active" : ""}
               key={scenario.asset}
               onClick={() => setSelectedAsset(scenario)}
             >
               <span>{scenario.asset}</span>
-              <small>{scenario.change24h > 0 ? "+" : ""}{scenario.change24h}%</small>
+              <small>{scenario.change24h > 0 ? "+" : ""}{scenario.change24h.toFixed(2)}%</small>
             </button>
           ))}
         </nav>
@@ -204,6 +261,10 @@ function App() {
               <h3>{receipt.asset} under {receipt.marketRegime}</h3>
             </div>
             <p>{receipt.thesis}</p>
+            <div className="price-line">
+              <span>${selectedAsset.price.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
+              <span>{selectedAsset.dataSource === "live-cmc-rest" ? "CMC REST" : "Demo scenario"}</span>
+            </div>
           </div>
           <div className="receipt-hash">
             <Copy size={16} />
