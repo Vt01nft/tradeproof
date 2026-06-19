@@ -96,13 +96,21 @@ button {
 }
 
 .brand-mark svg {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   fill: none;
   stroke: var(--lime);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.2;
+  stroke-width: 18;
+}
+
+.brand-mark svg path:nth-child(2) {
+  stroke: var(--soft);
+}
+
+.brand-mark svg path:nth-child(n + 3) {
+  stroke: var(--ink);
 }
 
 .panel,

@@ -19,10 +19,12 @@ import type { BnbAgentProof, Constitution, IntegrationHealth, MarketFeed, Market
 function Logo() {
   return (
     <div className="brand-mark" aria-label="TradeProof logo">
-      <svg viewBox="0 0 40 40" role="img">
-        <path d="M20 4 33 9v10c0 8.7-5.4 14.1-13 17-7.6-2.9-13-8.3-13-17V9l13-5Z" />
-        <path d="M13 21.2 18 26l10-12" />
-        <path d="M15 16h3m4 0h3m-7-4v8m7-12v12" />
+      <svg viewBox="0 0 256 256" role="img">
+        <path d="M82 91C82 61.73 105.73 38 135 38C164.27 38 188 61.73 188 91C188 120.27 164.27 144 135 144H112" />
+        <path d="M174 112C203.27 112 227 135.73 227 165C227 194.27 203.27 218 174 218H135V144" />
+        <path d="M48 218V121C48 91.73 71.73 68 101 68C130.27 68 154 91.73 154 121" />
+        <path d="M87 105H144" />
+        <path d="M101 105V184" />
       </svg>
     </div>
   );
