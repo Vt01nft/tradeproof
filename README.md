@@ -43,6 +43,9 @@ The local demo includes:
 - Trade court votes: Analyst, Skeptic, and Risk Officer.
 - Risk gates for liquidity, volatility, drawdown, sizing, sentiment, and news risk.
 - A trade receipt with strategy rules, CMC source labels, Trust Wallet action, BNB agent metadata, and receipt hash.
+- A self-custody trading desk that connects an injected wallet and prepares wallet-signed BNB Chain swaps.
+- Live PancakeSwap V2 quotes for native BNB to USDT/CAKE without backend custody.
+- Optional 0x aggregator quote support when `ZEROX_API_KEY` is configured.
 
 ## Sponsor Architecture
 
@@ -62,12 +65,13 @@ Planned live inputs:
 
 Role: self-custody execution boundary.
 
-Planned live actions:
+Current live actions:
 
 - Wallet and balance context.
 - Token risk checks.
 - Quote-only swap intent.
 - User-approved execution path.
+- EIP-1193 wallet signing through Trust Wallet-compatible injected wallets.
 
 The agent should not hold user keys.
 
@@ -132,9 +136,33 @@ CMC_API_KEY=
 TRUST_WALLET_CLIENT_ID=
 TRUST_WALLET_CLIENT_SECRET=
 BNB_AGENT_PRIVATE_KEY=
+ZEROX_API_KEY=
+BSC_RPC_URLS=
 ```
 
 Never commit real secrets.
+
+## Real Trading Mode
+
+TradeProof now supports a real self-custody MVP path:
+
+1. Connect a browser wallet.
+2. Switch to BNB Smart Chain when prompted.
+3. Use Demo Mode or a live strategy state that approves execution.
+4. Sell native `BNB` into `USDT` or `CAKE`.
+5. Preview a live PancakeSwap quote.
+6. Click Sign Swap.
+7. The connected wallet signs the transaction. TradeProof never receives private keys.
+
+The no-extra-key trading path supports native BNB sells through PancakeSwap V2. Add `ZEROX_API_KEY` to enable broader 0x aggregator routes for ERC-20 sell paths later.
+
+Security boundaries:
+
+- No seed phrases.
+- No backend custody.
+- No private user wallet keys in environment variables.
+- The app prepares transaction data; the user's wallet signs.
+- Quotes are constitution-gated before signing is enabled.
 
 ## DoraHacks Submission Draft
 

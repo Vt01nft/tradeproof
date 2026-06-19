@@ -3,6 +3,31 @@ import { join } from "node:path";
 
 const CMC_BASE_URL = "https://pro-api.coinmarketcap.com";
 const SYMBOLS = ["BNB", "CAKE", "USDT"];
+const ZERO_X_BASE_URL = "https://api.0x.org";
+const BNB_CHAIN_ID = 56;
+const BSC_RPC_URLS = (process.env.BSC_RPC_URLS ?? process.env.BSC_RPC_URL ?? "https://bsc-dataseed1.defibit.io,https://bsc-dataseed1.ninicoin.io,https://bsc-dataseed.binance.org")
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean);
+const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
+const WBNB_ADDRESS = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
+const TOKEN_MAP = {
+  BNB: {
+    symbol: "BNB",
+    decimals: 18,
+    address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+  },
+  USDT: {
+    symbol: "USDT",
+    decimals: 18,
+    address: "0x55d398326f99059fF775485246999027B3197955",
+  },
+  CAKE: {
+    symbol: "CAKE",
+    decimals: 18,
+    address: "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82",
+  },
+};
 
 export function loadLocalEnv() {
   const envPath = join(process.cwd(), ".env");
@@ -152,11 +177,264 @@ export function getIntegrationHealth() {
   return {
     ok: true,
     hasCmcKey: Boolean(process.env.CMC_API_KEY ?? process.env.VITE_CMC_API_KEY),
+    hasZeroXKey: Boolean(process.env.ZEROX_API_KEY ?? process.env.ZERO_X_API_KEY),
     hasTrustWalletCredentials: Boolean(
       (process.env.TRUST_WALLET_CLIENT_ID ?? process.env.VITE_TRUST_WALLET_CLIENT_ID) &&
         (process.env.TRUST_WALLET_CLIENT_SECRET ?? process.env.VITE_TRUST_WALLET_CLIENT_SECRET),
     ),
     hasBnbAgentKey: Boolean(process.env.BNB_AGENT_PRIVATE_KEY ?? process.env.VITE_BNB_AGENT_PRIVATE_KEY),
+  };
+}
+
+function parseUnits(amount, decimals) {
+  const value = String(amount ?? "0").trim();
+
+  if (!/^\d+(\.\d+)?$/.test(value)) {
+    throw new Error("Amount must be a positive decimal number.");
+  }
+
+  const [whole, fraction = ""] = value.split(".");
+  const padded = `${fraction}${"0".repeat(decimals)}`.slice(0, decimals);
+  const baseUnits = BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(padded || "0");
+
+  if (baseUnits <= 0n) {
+    throw new Error("Amount must be greater than zero.");
+  }
+
+  return baseUnits.toString();
+}
+
+function getTradeToken(symbol) {
+  const token = TOKEN_MAP[String(symbol ?? "").toUpperCase()];
+
+  if (!token) {
+    throw new Error("Unsupported token. TradeProof currently supports BNB, USDT, and CAKE.");
+  }
+
+  return token;
+}
+
+function validateTaker(address) {
+  const taker = String(address ?? "");
+
+  if (!/^0x[a-fA-F0-9]{40}$/.test(taker)) {
+    throw new Error("A connected EVM wallet address is required.");
+  }
+
+  return taker;
+}
+
+function strip0x(value) {
+  return String(value).replace(/^0x/i, "");
+}
+
+function pad64(value) {
+  return strip0x(value).padStart(64, "0");
+}
+
+function encodeUint(value) {
+  return BigInt(value).toString(16).padStart(64, "0");
+}
+
+function encodeAddress(address) {
+  return pad64(address.toLowerCase());
+}
+
+function encodePath(addresses) {
+  return `${encodeUint(addresses.length)}${addresses.map(encodeAddress).join("")}`;
+}
+
+async function bscRpc(method, params) {
+  let lastError = null;
+
+  for (const rpcUrl of BSC_RPC_URLS) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const payload = await response.json();
+
+      if (payload.error) {
+        throw new Error(payload.error.message ?? "BSC RPC request failed.");
+      }
+
+      return payload.result;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(lastError instanceof Error ? lastError.message : "All BSC RPC endpoints failed.");
+}
+
+function decodeUintArray(hexValue) {
+  const hex = strip0x(hexValue);
+  const length = Number.parseInt(hex.slice(64, 128), 16);
+  const values = [];
+
+  for (let index = 0; index < length; index += 1) {
+    const start = 128 + index * 64;
+    values.push(BigInt(`0x${hex.slice(start, start + 64)}`).toString());
+  }
+
+  return values;
+}
+
+async function buildPancakeNativeQuote({ sellToken, buyToken, sellAmount, sellAmountBaseUnits, taker, slippageBps, createdAt }) {
+  if (sellToken.symbol !== "BNB" || buyToken.symbol === "BNB") {
+    return null;
+  }
+
+  const path = [WBNB_ADDRESS, buyToken.address];
+  const getAmountsOutSelector = "d06ca61f";
+  const getAmountsOutData = `0x${getAmountsOutSelector}${encodeUint(sellAmountBaseUnits)}${encodeUint(64)}${encodePath(path)}`;
+  const output = await bscRpc("eth_call", [{ to: PANCAKE_V2_ROUTER, data: getAmountsOutData }, "latest"]);
+  const amounts = decodeUintArray(output);
+  const buyAmount = amounts[amounts.length - 1];
+  const minBuyAmount = ((BigInt(buyAmount) * BigInt(10000 - Number(slippageBps))) / 10000n).toString();
+  const deadline = Math.floor(Date.now() / 1000) + 60 * 10;
+  const swapSelector = "7ff36ab5";
+  const swapData = `0x${swapSelector}${encodeUint(minBuyAmount)}${encodeUint(128)}${encodeAddress(taker)}${encodeUint(deadline)}${encodePath(path)}`;
+  const proofBase = `pancake:${sellToken.symbol}:${buyToken.symbol}:${sellAmountBaseUnits}:${taker}:${createdAt}`;
+
+  return {
+    mode: "live-pancake",
+    chainId: BNB_CHAIN_ID,
+    sellToken: sellToken.symbol,
+    buyToken: buyToken.symbol,
+    sellAmount,
+    sellAmountBaseUnits,
+    taker,
+    buyAmount,
+    minBuyAmount,
+    transaction: {
+      to: PANCAKE_V2_ROUTER,
+      data: swapData,
+      value: sellAmountBaseUnits,
+    },
+    route: { source: "PancakeSwap V2", path },
+    message: "Live PancakeSwap quote prepared for native BNB. User wallet must sign; TradeProof never takes custody.",
+    proofId: proofHash(`${proofBase}:${buyAmount}:${minBuyAmount}`),
+    createdAt,
+  };
+}
+
+async function zeroXFetch(path, searchParams) {
+  const apiKey = process.env.ZEROX_API_KEY ?? process.env.ZERO_X_API_KEY;
+
+  if (!apiKey) {
+    return null;
+  }
+
+  const url = new URL(`${ZERO_X_BASE_URL}${path}`);
+  for (const [key, value] of searchParams.entries()) {
+    url.searchParams.set(key, value);
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "0x-api-key": apiKey,
+      "0x-version": "v2",
+      Accept: "application/json",
+    },
+  });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload?.message ?? payload?.reason ?? `0x request failed with ${response.status}`);
+  }
+
+  return payload;
+}
+
+export async function buildSwapQuote(searchParams, quoteType = "price") {
+  const sellToken = getTradeToken(searchParams.get("sellToken") ?? "BNB");
+  const buyToken = getTradeToken(searchParams.get("buyToken") ?? "USDT");
+  const sellAmount = searchParams.get("sellAmount") ?? "0.01";
+  const taker = validateTaker(searchParams.get("taker"));
+  const slippageBps = String(Math.min(Math.max(toNumber(searchParams.get("slippageBps"), 75), 10), 500));
+  const sellAmountBaseUnits = parseUnits(sellAmount, sellToken.decimals);
+  const createdAt = new Date().toISOString();
+  const proofBase = `${quoteType}:${sellToken.symbol}:${buyToken.symbol}:${sellAmountBaseUnits}:${taker}:${createdAt}`;
+
+  if (sellToken.symbol === buyToken.symbol) {
+    return {
+      mode: "blocked",
+      chainId: BNB_CHAIN_ID,
+      sellToken: sellToken.symbol,
+      buyToken: buyToken.symbol,
+      sellAmount,
+      sellAmountBaseUnits,
+      taker,
+      message: "Sell and buy token must be different.",
+      proofId: proofHash(proofBase),
+      createdAt,
+    };
+  }
+
+  const pancakeQuote = await buildPancakeNativeQuote({
+    sellToken,
+    buyToken,
+    sellAmount,
+    sellAmountBaseUnits,
+    taker,
+    slippageBps,
+    createdAt,
+  });
+
+  if (pancakeQuote) {
+    return pancakeQuote;
+  }
+
+  const params = new URLSearchParams({
+    chainId: String(BNB_CHAIN_ID),
+    sellToken: sellToken.address,
+    buyToken: buyToken.address,
+    sellAmount: sellAmountBaseUnits,
+    taker,
+    slippageBps,
+  });
+  const payload = await zeroXFetch(`/swap/allowance-holder/${quoteType}`, params);
+
+  if (!payload) {
+    return {
+      mode: "missing-api-key",
+      chainId: BNB_CHAIN_ID,
+      sellToken: sellToken.symbol,
+      buyToken: buyToken.symbol,
+      sellAmount,
+      sellAmountBaseUnits,
+      taker,
+      message: "ZEROX_API_KEY is not configured. Add it to enable real executable swap quotes.",
+      proofId: proofHash(proofBase),
+      createdAt,
+    };
+  }
+
+  return {
+      mode: "live-0x",
+    chainId: BNB_CHAIN_ID,
+    sellToken: sellToken.symbol,
+    buyToken: buyToken.symbol,
+    sellAmount,
+    sellAmountBaseUnits,
+    taker,
+    price: payload.price,
+    buyAmount: payload.buyAmount,
+    minBuyAmount: payload.minBuyAmount,
+    estimatedPriceImpact: payload.estimatedPriceImpact,
+    allowanceTarget: payload.allowanceTarget ?? payload?.issues?.allowance?.spender,
+    transaction: payload.transaction,
+    route: payload.route,
+    issues: payload.issues,
+    message:
+      quoteType === "quote"
+        ? "Firm executable 0x quote prepared. User wallet must sign; TradeProof never takes custody."
+        : "Live 0x indicative price prepared for BNB Chain.",
+    proofId: proofHash(`${proofBase}:${payload.buyAmount ?? ""}:${payload.transaction?.to ?? ""}`),
+    createdAt,
   };
 }
 

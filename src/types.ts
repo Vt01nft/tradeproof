@@ -69,6 +69,7 @@ export interface MarketFeed {
 export interface IntegrationHealth {
   ok: boolean;
   hasCmcKey: boolean;
+  hasZeroXKey: boolean;
   hasTrustWalletCredentials: boolean;
   hasBnbAgentKey: boolean;
 }
@@ -98,4 +99,46 @@ export interface BnbAgentProof {
   receiptHash: string;
   profileProof: string;
   createdAt: string;
+}
+
+export type TradeTokenSymbol = "BNB" | "USDT" | "CAKE";
+
+export interface WalletState {
+  address: string;
+  chainId: number | null;
+  status: "disconnected" | "connecting" | "connected" | "wrong-chain" | "unavailable";
+  error?: string;
+}
+
+export interface SwapQuote {
+  mode: "live-0x" | "live-pancake" | "missing-api-key" | "blocked" | "error";
+  chainId: number;
+  sellToken: TradeTokenSymbol;
+  buyToken: TradeTokenSymbol;
+  sellAmount: string;
+  sellAmountBaseUnits: string;
+  taker: string;
+  price?: string;
+  buyAmount?: string;
+  minBuyAmount?: string;
+  estimatedPriceImpact?: string;
+  allowanceTarget?: string;
+  transaction?: {
+    to: string;
+    data: string;
+    value: string;
+    gas?: string;
+    gasPrice?: string;
+  };
+  route?: unknown;
+  issues?: unknown;
+  message: string;
+  proofId: string;
+  createdAt: string;
+}
+
+export interface TradeIntent {
+  status: "idle" | "wallet_required" | "wrong_chain" | "blocked" | "quote_ready" | "signing" | "submitted" | "failed";
+  txHash?: string;
+  error?: string;
 }

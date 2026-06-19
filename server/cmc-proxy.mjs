@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import {
   buildBnbAgentProfile,
   buildMarketFeed,
+  buildSwapQuote,
   buildTrustQuoteProof,
   getIntegrationHealth,
   loadLocalEnv,
@@ -32,6 +33,24 @@ createServer(async (request, response) => {
 
   if (url.pathname === "/api/agent/profile") {
     sendJson(response, 200, buildBnbAgentProfile(url.searchParams));
+    return;
+  }
+
+  if (url.pathname === "/api/quote/price") {
+    try {
+      sendJson(response, 200, await buildSwapQuote(url.searchParams, "price"));
+    } catch (error) {
+      sendJson(response, 400, { mode: "error", message: error instanceof Error ? error.message : "Quote failed." });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/quote/firm") {
+    try {
+      sendJson(response, 200, await buildSwapQuote(url.searchParams, "quote"));
+    } catch (error) {
+      sendJson(response, 400, { mode: "error", message: error instanceof Error ? error.message : "Quote failed." });
+    }
     return;
   }
 

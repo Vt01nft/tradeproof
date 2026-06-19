@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BadgeCheck,
@@ -14,17 +14,40 @@ import {
 import "./App.css";
 import { defaultConstitution, marketScenarios, sponsorIntegrations } from "./data/marketScenarios";
 import { generateReceipt } from "./lib/strategy";
-import type { BnbAgentProof, Constitution, IntegrationHealth, MarketFeed, MarketSignal, TrustWalletProof } from "./types";
+import type {
+  BnbAgentProof,
+  Constitution,
+  IntegrationHealth,
+  MarketFeed,
+  MarketSignal,
+  SwapQuote,
+  TradeIntent,
+  TradeTokenSymbol,
+  TrustWalletProof,
+  WalletState,
+} from "./types";
+
+declare global {
+  interface Window {
+    ethereum?: {
+      request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+      on?: (event: string, callback: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, callback: (...args: unknown[]) => void) => void;
+    };
+  }
+}
+
+const BNB_CHAIN_ID = 56;
+const TRADE_TOKENS: TradeTokenSymbol[] = ["BNB", "USDT", "CAKE"];
 
 function Logo() {
   return (
     <div className="brand-mark" aria-label="TradeProof logo">
       <svg viewBox="0 0 256 256" role="img">
-        <path d="M82 91C82 61.73 105.73 38 135 38C164.27 38 188 61.73 188 91C188 120.27 164.27 144 135 144H112" />
-        <path d="M174 112C203.27 112 227 135.73 227 165C227 194.27 203.27 218 174 218H135V144" />
-        <path d="M48 218V121C48 91.73 71.73 68 101 68C130.27 68 154 91.73 154 121" />
-        <path d="M87 105H144" />
-        <path d="M101 105V184" />
+        <path d="M64 210V112C64 75.55 93.55 46 130 46C166.45 46 196 75.55 196 112C196 148.45 166.45 178 130 178C93.55 178 64 148.45 64 112" />
+        <path d="M130 78V178" />
+        <path d="M130 128H184C214.38 128 239 103.38 239 73C239 42.62 214.38 18 184 18C153.62 18 129 42.62 129 73" />
+        <path d="M64 128H130" />
       </svg>
     </div>
   );
@@ -57,6 +80,18 @@ function CheckRow({ label, ok }: { label: string; ok: boolean }) {
   );
 }
 
+function shortAddress(address: string) {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function normalizeChainId(chainId: unknown) {
+  if (typeof chainId === "string") {
+    return chainId.startsWith("0x") ? Number.parseInt(chainId, 16) : Number(chainId);
+  }
+
+  return typeof chainId === "number" ? chainId : null;
+}
+
 function App() {
   const [marketFeed, setMarketFeed] = useState<MarketFeed>({
     mode: "fallback",
@@ -68,11 +103,21 @@ function App() {
   const [integrationHealth, setIntegrationHealth] = useState<IntegrationHealth>({
     ok: false,
     hasCmcKey: false,
+    hasZeroXKey: false,
     hasTrustWalletCredentials: false,
     hasBnbAgentKey: false,
   });
   const [trustProof, setTrustProof] = useState<TrustWalletProof | null>(null);
   const [bnbProof, setBnbProof] = useState<BnbAgentProof | null>(null);
+  const [wallet, setWallet] = useState<WalletState>({ address: "", chainId: null, status: "disconnected" });
+  const [sellToken, setSellToken] = useState<TradeTokenSymbol>("BNB");
+  const [buyToken, setBuyToken] = useState<TradeTokenSymbol>("USDT");
+  const [sellAmount, setSellAmount] = useState("0.01");
+  const [swapQuote, setSwapQuote] = useState<SwapQuote | null>(null);
+  const [tradeIntent, setTradeIntent] = useState<TradeIntent>({ status: "idle" });
+  const [isQuoting, setIsQuoting] = useState(false);
+  const [isSigning, setIsSigning] = useState(false);
+  const feedRequestRef = useRef(0);
   const [selectedAsset, setSelectedAsset] = useState<MarketSignal>(marketScenarios[0]);
   const [constitution, setConstitution] = useState<Constitution>(defaultConstitution);
   const visibleScenarios = marketFeed.assets.length ? marketFeed.assets : marketScenarios;
@@ -93,8 +138,11 @@ function App() {
   );
   const receipt = useMemo(() => generateReceipt(selectedAsset, constitution), [selectedAsset, constitution]);
   const approvedCount = receipt.courtVotes.filter((vote) => vote.vote === "approve").length;
+  const canRequestQuote = wallet.status === "connected" && receipt.decision !== "NO_TRADE" && sellToken !== buyToken;
 
   async function refreshMarketFeed() {
+    const requestId = feedRequestRef.current + 1;
+    feedRequestRef.current = requestId;
     setIsRefreshing(true);
 
     try {
@@ -104,10 +152,18 @@ function App() {
       const health = (await healthResponse.json()) as IntegrationHealth;
       const nextAssets = feed.assets.length ? feed.assets : marketScenarios;
 
+      if (requestId !== feedRequestRef.current) {
+        return;
+      }
+
       setMarketFeed({ ...feed, assets: nextAssets });
       setIntegrationHealth(health);
       setSelectedAsset((current) => nextAssets.find((asset) => asset.asset === current.asset) ?? nextAssets[0]);
     } catch {
+      if (requestId !== feedRequestRef.current) {
+        return;
+      }
+
       setMarketFeed({
         mode: "fallback",
         generatedAt: new Date().toISOString(),
@@ -115,11 +171,15 @@ function App() {
         assets: marketScenarios,
       });
     } finally {
-      setIsRefreshing(false);
+      if (requestId === feedRequestRef.current) {
+        setIsRefreshing(false);
+      }
     }
   }
 
   function useDemoScenarios() {
+    feedRequestRef.current += 1;
+    setIsRefreshing(false);
     setMarketFeed({
       mode: "fallback",
       generatedAt: new Date().toISOString(),
@@ -127,6 +187,152 @@ function App() {
       assets: marketScenarios,
     });
     setSelectedAsset(marketScenarios[0]);
+  }
+
+  async function connectWallet() {
+    if (!window.ethereum) {
+      setWallet({ address: "", chainId: null, status: "unavailable", error: "No injected wallet found." });
+      return;
+    }
+
+    setWallet((current) => ({ ...current, status: "connecting", error: undefined }));
+
+    try {
+      const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
+      const chainId = normalizeChainId(await window.ethereum.request({ method: "eth_chainId" }));
+      const address = accounts[0] ?? "";
+
+      setWallet({
+        address,
+        chainId,
+        status: chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
+      });
+    } catch (error) {
+      setWallet({
+        address: "",
+        chainId: null,
+        status: "disconnected",
+        error: error instanceof Error ? error.message : "Wallet connection failed.",
+      });
+    }
+  }
+
+  async function switchToBnbChain() {
+    if (!window.ethereum) {
+      return;
+    }
+
+    try {
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+    } catch {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: "0x38",
+            chainName: "BNB Smart Chain",
+            nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+            rpcUrls: ["https://bsc-dataseed.binance.org"],
+            blockExplorerUrls: ["https://bscscan.com"],
+          },
+        ],
+      });
+    }
+
+    const chainId = normalizeChainId(await window.ethereum.request({ method: "eth_chainId" }));
+    setWallet((current) => ({
+      ...current,
+      chainId,
+      status: current.address && chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
+    }));
+  }
+
+  function disconnectWallet() {
+    setWallet({ address: "", chainId: null, status: "disconnected" });
+    setSwapQuote(null);
+    setTradeIntent({ status: "idle" });
+  }
+
+  async function requestSwapQuote(type: "price" | "firm" = "price") {
+    if (!wallet.address) {
+      setTradeIntent({ status: "wallet_required" });
+      return null;
+    }
+
+    if (wallet.chainId !== BNB_CHAIN_ID) {
+      setTradeIntent({ status: "wrong_chain" });
+      return null;
+    }
+
+    if (receipt.decision === "NO_TRADE") {
+      setTradeIntent({ status: "blocked", error: "The constitution blocks execution for this market state." });
+      return null;
+    }
+
+    setIsQuoting(true);
+
+    try {
+      const params = new URLSearchParams({
+        sellToken,
+        buyToken,
+        sellAmount,
+        taker: wallet.address,
+        slippageBps: "75",
+      });
+      const response = await fetch(`/api/quote/${type}?${params.toString()}`);
+      const quote = (await response.json()) as SwapQuote;
+
+      setSwapQuote(quote);
+      setTradeIntent({
+        status: quote.mode === "live-0x" || quote.mode === "live-pancake" ? "quote_ready" : quote.mode === "blocked" ? "blocked" : "failed",
+        error: quote.mode === "live-0x" || quote.mode === "live-pancake" ? undefined : quote.message,
+      });
+      return quote;
+    } catch (error) {
+      setTradeIntent({ status: "failed", error: error instanceof Error ? error.message : "Quote failed." });
+      return null;
+    } finally {
+      setIsQuoting(false);
+    }
+  }
+
+  async function executeSwap() {
+    if (!window.ethereum) {
+      setTradeIntent({ status: "wallet_required", error: "No injected wallet found." });
+      return;
+    }
+
+    setIsSigning(true);
+
+    try {
+      const quote = await requestSwapQuote("firm");
+
+      if (!quote?.transaction || (quote.mode !== "live-0x" && quote.mode !== "live-pancake")) {
+        setTradeIntent({ status: "failed", error: quote?.message ?? "No executable transaction returned." });
+        return;
+      }
+
+      setTradeIntent({ status: "signing" });
+      const txHash = (await window.ethereum.request({
+        method: "eth_sendTransaction",
+        params: [
+          {
+            from: wallet.address,
+            to: quote.transaction.to,
+            data: quote.transaction.data,
+            value: `0x${BigInt(quote.transaction.value || "0").toString(16)}`,
+            gas: quote.transaction.gas ? `0x${BigInt(quote.transaction.gas).toString(16)}` : undefined,
+            gasPrice: quote.transaction.gasPrice ? `0x${BigInt(quote.transaction.gasPrice).toString(16)}` : undefined,
+          },
+        ],
+      })) as string;
+
+      setTradeIntent({ status: "submitted", txHash });
+    } catch (error) {
+      setTradeIntent({ status: "failed", error: error instanceof Error ? error.message : "Swap signing failed." });
+    } finally {
+      setIsSigning(false);
+    }
   }
 
   useEffect(() => {
@@ -164,6 +370,9 @@ function App() {
     const payload = JSON.stringify(
       {
         ...receipt,
+        wallet,
+        swapQuote,
+        tradeIntent,
         sponsorProofs: {
           trustWallet: trustProof,
           bnbAgent: bnbProof,
@@ -290,6 +499,15 @@ function App() {
             <button className="secondary-action" onClick={useDemoScenarios}>
               Demo Mode
             </button>
+            {wallet.status === "connected" ? (
+              <button className="secondary-action" onClick={disconnectWallet}>
+                {shortAddress(wallet.address)}
+              </button>
+            ) : (
+              <button className="secondary-action" onClick={connectWallet}>
+                Connect Wallet
+              </button>
+            )}
             <button className="secondary-action" onClick={refreshMarketFeed} disabled={isRefreshing}>
               <Activity size={18} />
               {isRefreshing ? "Refreshing" : "Refresh CMC"}
@@ -406,7 +624,66 @@ function App() {
           <article className="panel">
             <div className="section-title">
               <WalletCards size={18} />
-              <h2>Execution Proof</h2>
+              <h2>Trading Desk</h2>
+            </div>
+            <div className="trade-desk">
+              <div className="trade-row">
+                <label>
+                  Sell
+                  <select value={sellToken} onChange={(event) => setSellToken(event.target.value as TradeTokenSymbol)}>
+                    {TRADE_TOKENS.map((token) => (
+                      <option key={token} value={token}>
+                        {token}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Buy
+                  <select value={buyToken} onChange={(event) => setBuyToken(event.target.value as TradeTokenSymbol)}>
+                    {TRADE_TOKENS.map((token) => (
+                      <option key={token} value={token}>
+                        {token}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label>
+                Amount
+                <input value={sellAmount} onChange={(event) => setSellAmount(event.target.value)} />
+              </label>
+              {wallet.status === "wrong-chain" ? (
+                <button className="primary-action full-width" onClick={switchToBnbChain}>
+                  Switch to BNB Chain
+                </button>
+              ) : (
+                <div className="trade-actions">
+                  <button className="secondary-action" onClick={() => void requestSwapQuote("price")} disabled={!canRequestQuote || isQuoting}>
+                    {isQuoting ? "Quoting" : "Preview Quote"}
+                  </button>
+                  <button className="primary-action" onClick={executeSwap} disabled={!canRequestQuote || isSigning}>
+                    {isSigning ? "Signing" : "Sign Swap"}
+                  </button>
+                </div>
+              )}
+              <div className={`intent ${tradeIntent.status}`}>
+                <strong>{tradeIntent.status.replace("_", " ")}</strong>
+                <p>
+                  {tradeIntent.txHash
+                    ? `Submitted: ${tradeIntent.txHash}`
+                    : tradeIntent.error ?? "Wallet-signed trading is constitution-gated and runs only on BNB Chain."}
+                </p>
+              </div>
+              {swapQuote ? (
+                <div className="quote-preview">
+                  <strong>{swapQuote.mode === "live-pancake" ? "PancakeSwap quote" : swapQuote.mode === "live-0x" ? "0x quote" : "Quote status"}</strong>
+                  <p>{swapQuote.message}</p>
+                  <code>{swapQuote.proofId}</code>
+                  {swapQuote.buyAmount ? <span>Buy amount: {swapQuote.buyAmount}</span> : null}
+                  {swapQuote.minBuyAmount ? <span>Min buy: {swapQuote.minBuyAmount}</span> : null}
+                </div>
+              ) : null}
             </div>
             <div className="proof-block">
               <strong>Trust Wallet</strong>
