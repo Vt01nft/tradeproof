@@ -153,6 +153,11 @@ createServer(async (request, response) => {
     sendJson(response, 200, {
       ok: true,
       hasCmcKey: Boolean(process.env.CMC_API_KEY ?? process.env.VITE_CMC_API_KEY),
+      hasTrustWalletCredentials: Boolean(
+        (process.env.TRUST_WALLET_CLIENT_ID ?? process.env.VITE_TRUST_WALLET_CLIENT_ID) &&
+          (process.env.TRUST_WALLET_CLIENT_SECRET ?? process.env.VITE_TRUST_WALLET_CLIENT_SECRET),
+      ),
+      hasBnbAgentKey: Boolean(process.env.BNB_AGENT_PRIVATE_KEY ?? process.env.VITE_BNB_AGENT_PRIVATE_KEY),
     });
     return;
   }

@@ -237,6 +237,11 @@ input[type="range"] {
   color: var(--teal);
 }
 
+.status-pill.secure {
+  background: #eef5ff;
+  color: #2454a6;
+}
+
 .workspace {
   padding: 24px;
 }

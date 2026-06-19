@@ -1,6 +1,6 @@
 export type Decision = "BUY" | "SELL" | "HOLD" | "NO_TRADE";
 
-export type SponsorStatus = "live-ready" | "mocked" | "pending-key";
+export type SponsorStatus = "live-ready" | "credentials-ready" | "mocked" | "pending-key";
 
 export type AssetSymbol = "BNB" | "CAKE" | "USDT";
 
@@ -64,4 +64,11 @@ export interface MarketFeed {
   generatedAt: string;
   message: string;
   assets: MarketSignal[];
+}
+
+export interface IntegrationHealth {
+  ok: boolean;
+  hasCmcKey: boolean;
+  hasTrustWalletCredentials: boolean;
+  hasBnbAgentKey: boolean;
 }

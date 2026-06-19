@@ -14,7 +14,7 @@ import {
 import "./App.css";
 import { defaultConstitution, marketScenarios, sponsorIntegrations } from "./data/marketScenarios";
 import { generateReceipt } from "./lib/strategy";
-import type { Constitution, MarketFeed, MarketSignal } from "./types";
+import type { Constitution, IntegrationHealth, MarketFeed, MarketSignal } from "./types";
 
 function Logo() {
   return (
@@ -28,7 +28,7 @@ function Logo() {
   );
 }
 
-function StatusPill({ tone, children }: { tone: "good" | "warn" | "neutral"; children: string }) {
+function StatusPill({ tone, children }: { tone: "good" | "warn" | "neutral" | "secure"; children: string }) {
   return <span className={`status-pill ${tone}`}>{children}</span>;
 }
 
@@ -63,12 +63,28 @@ function App() {
     assets: marketScenarios,
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [integrationHealth, setIntegrationHealth] = useState<IntegrationHealth>({
+    ok: false,
+    hasCmcKey: false,
+    hasTrustWalletCredentials: false,
+    hasBnbAgentKey: false,
+  });
   const [selectedAsset, setSelectedAsset] = useState<MarketSignal>(marketScenarios[0]);
   const [constitution, setConstitution] = useState<Constitution>(defaultConstitution);
   const visibleScenarios = marketFeed.assets.length ? marketFeed.assets : marketScenarios;
   const sponsorStack = sponsorIntegrations.map((integration) =>
     integration.name === "CoinMarketCap Agent Hub"
       ? { ...integration, status: marketFeed.mode === "live" ? ("live-ready" as const) : ("pending-key" as const) }
+      : integration.name === "Trust Wallet Agent Kit"
+        ? {
+            ...integration,
+            status: integrationHealth.hasTrustWalletCredentials ? ("credentials-ready" as const) : integration.status,
+          }
+        : integration.name === "BNB AI Agent SDK"
+          ? {
+              ...integration,
+              status: integrationHealth.hasBnbAgentKey ? ("credentials-ready" as const) : integration.status,
+            }
       : integration,
   );
   const receipt = useMemo(() => generateReceipt(selectedAsset, constitution), [selectedAsset, constitution]);
@@ -80,9 +96,12 @@ function App() {
     try {
       const response = await fetch("/api/market");
       const feed = (await response.json()) as MarketFeed;
+      const healthResponse = await fetch("/api/health");
+      const health = (await healthResponse.json()) as IntegrationHealth;
       const nextAssets = feed.assets.length ? feed.assets : marketScenarios;
 
       setMarketFeed({ ...feed, assets: nextAssets });
+      setIntegrationHealth(health);
       setSelectedAsset((current) => nextAssets.find((asset) => asset.asset === current.asset) ?? nextAssets[0]);
     } catch {
       setMarketFeed({
@@ -199,6 +218,8 @@ function App() {
                   tone={
                     integration.status === "live-ready"
                       ? "good"
+                      : integration.status === "credentials-ready"
+                        ? "secure"
                       : integration.status === "pending-key"
                         ? "warn"
                         : "neutral"
