@@ -42,6 +42,7 @@ The local demo includes:
 - Adjustable user constitution controls.
 - Trade court votes: Analyst, Skeptic, and Risk Officer.
 - Risk gates for liquidity, volatility, drawdown, sizing, sentiment, and news risk.
+- A callable strategy backtest endpoint at `/api/strategy/backtest` with assumptions, daily replay windows, PnL, drawdown, win rate, trade count, rule adherence, and proof id.
 - A trade receipt with strategy rules, CMC source labels, Trust Wallet action, BNB agent metadata, and receipt hash.
 - A self-custody trading desk that connects an injected wallet and prepares wallet-signed BNB Chain swaps.
 - Live PancakeSwap V2 quotes for native BNB to USDT/CAKE without backend custody.
@@ -158,6 +159,28 @@ TradeProof now supports a real self-custody MVP path:
 9. Open the submitted transaction on BscScan.
 
 The no-extra-key trading path supports native BNB sells through PancakeSwap V2. Add `ZEROX_API_KEY` to enable broader 0x aggregator routes for ERC-20 sell paths later.
+
+Signing controls:
+
+- `HOLD` and `NO_TRADE` decisions cannot sign swaps.
+- `Strategy Only` and `Paper Trade` modes cannot sign swaps.
+- Users must preview a live quote and confirm they reviewed it before `Sign Swap` is enabled.
+- Native BNB sell amounts are checked against the connected wallet balance before quote/signing.
+
+## Strategy Backtest API
+
+Track 2 reviewers can call the strategy surface directly:
+
+```bash
+curl "https://tradeproof-nine.vercel.app/api/strategy/backtest?asset=BNB&windowDays=30&maxPositionSize=12&maxDrawdown=8&minLiquidityScore=72&maxVolatility=7&stopLoss=4.5&slippageBps=75"
+```
+
+The response includes:
+
+- Input and output schemas.
+- Fee, slippage, capital, sizing, and stop assumptions.
+- Daily replay windows with decision, position, PnL, drawdown, and rule-adherence data.
+- Summary metrics and a proof id.
 
 Security boundaries:
 

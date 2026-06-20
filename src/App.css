@@ -100,15 +100,15 @@ button {
   width: 36px;
   height: 36px;
   fill: none;
-  stroke: #5e6268;
-  stroke-linecap: square;
+  stroke: #6a6d72;
+  stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 18;
 }
 
 .brand-mark svg path:nth-child(2),
 .brand-mark svg path:nth-child(3) {
-  stroke: #202226;
+  stroke: #25272a;
 }
 
 .panel,
@@ -679,6 +679,16 @@ input:not([type="range"]) {
   overflow-wrap: anywhere;
 }
 
+.trade-warning {
+  border: 1px solid rgba(255, 92, 82, 0.28);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 92, 82, 0.1);
+  color: #ffb4ad;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .intent,
 .quote-preview {
   border: 1px solid var(--line);
@@ -749,6 +759,32 @@ input:not([type="range"]) {
   font-weight: 800;
 }
 
+.execution-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 2px 0 0;
+  border: 1px solid rgba(205, 250, 80, 0.18);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(205, 250, 80, 0.06);
+  color: var(--soft);
+  line-height: 1.35;
+}
+
+.execution-confirmation input {
+  width: 16px;
+  min-height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--lime);
+}
+
+.execution-confirmation span {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .quote-preview code {
   width: fit-content;
   max-width: 100%;
@@ -774,6 +810,61 @@ input:not([type="range"]) {
 .rules-list li {
   padding: 8px 0;
   line-height: 1.45;
+}
+
+.backtest-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(7, 11, 16, 0.42);
+}
+
+.backtest-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.backtest-head code {
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--lime);
+  overflow-wrap: anywhere;
+}
+
+.backtest-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.backtest-metrics span {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--soft);
+  font-weight: 900;
+}
+
+.backtest-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.backtest-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .source-tags {
@@ -828,7 +919,8 @@ input:not([type="range"]) {
 
   .trade-row,
   .trade-actions,
-  .quote-grid {
+  .quote-grid,
+  .backtest-metrics {
     grid-template-columns: 1fr;
   }
 

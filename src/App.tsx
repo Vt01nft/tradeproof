@@ -20,6 +20,7 @@ import type {
   IntegrationHealth,
   MarketFeed,
   MarketSignal,
+  StrategyBacktestReport,
   SwapQuote,
   TradeIntent,
   TradeTokenSymbol,
@@ -49,10 +50,9 @@ function Logo() {
   return (
     <div className="brand-mark" aria-label="TradeProof logo">
       <svg viewBox="0 0 256 256" role="img">
-        <path d="M64 210V112C64 75.55 93.55 46 130 46C166.45 46 196 75.55 196 112C196 148.45 166.45 178 130 178C93.55 178 64 148.45 64 112" />
-        <path d="M130 78V178" />
-        <path d="M130 128H184C214.38 128 239 103.38 239 73C239 42.62 214.38 18 184 18C153.62 18 129 42.62 129 73" />
-        <path d="M64 128H130" />
+        <path d="M76 204V118C76 86.5 101.5 61 133 61C164.5 61 190 86.5 190 118C190 149.5 164.5 175 133 175C105 175 82 155 77 128" />
+        <path d="M134 92V164" />
+        <path d="M143 83C153 58 177 42 205 48C238 55 257 88 244 119C231 150 196 163 168 146C152 136 143 121 140 105" />
       </svg>
     </div>
   );
@@ -129,6 +129,24 @@ function formatBnbBalance(balanceHex: unknown) {
   return formatBaseUnits(BigInt(balanceHex).toString(), 18, 5);
 }
 
+function parseDecimalUnits(amount: string, decimals: number) {
+  const value = amount.trim();
+
+  if (!/^\d+(\.\d+)?$/.test(value)) {
+    return null;
+  }
+
+  const [whole, fraction = ""] = value.split(".");
+
+  if (fraction.length > decimals) {
+    return null;
+  }
+
+  const padded = `${fraction}${"0".repeat(decimals)}`.slice(0, decimals);
+
+  return BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(padded || "0");
+}
+
 function App() {
   const [marketFeed, setMarketFeed] = useState<MarketFeed>({
     mode: "fallback",
@@ -146,6 +164,7 @@ function App() {
   });
   const [trustProof, setTrustProof] = useState<TrustWalletProof | null>(null);
   const [bnbProof, setBnbProof] = useState<BnbAgentProof | null>(null);
+  const [backtestReport, setBacktestReport] = useState<StrategyBacktestReport | null>(null);
   const [wallet, setWallet] = useState<WalletState>({ address: "", chainId: null, status: "disconnected" });
   const [sellToken, setSellToken] = useState<TradeTokenSymbol>("BNB");
   const [buyToken, setBuyToken] = useState<TradeTokenSymbol>("USDT");
@@ -153,6 +172,7 @@ function App() {
   const [slippageBps, setSlippageBps] = useState("75");
   const [swapQuote, setSwapQuote] = useState<SwapQuote | null>(null);
   const [tradeIntent, setTradeIntent] = useState<TradeIntent>({ status: "idle" });
+  const [executionConfirmed, setExecutionConfirmed] = useState(false);
   const [isQuoting, setIsQuoting] = useState(false);
   const [isSigning, setIsSigning] = useState(false);
   const feedRequestRef = useRef(0);
@@ -176,7 +196,29 @@ function App() {
   );
   const receipt = useMemo(() => generateReceipt(selectedAsset, constitution), [selectedAsset, constitution]);
   const approvedCount = receipt.courtVotes.filter((vote) => vote.vote === "approve").length;
-  const canRequestQuote = wallet.status === "connected" && receipt.decision !== "NO_TRADE" && sellToken !== buyToken;
+  const sellAmountBaseUnits = useMemo(() => parseDecimalUnits(sellAmount, TOKEN_DECIMALS[sellToken]), [sellAmount, sellToken]);
+  const amountExceedsBalance =
+    wallet.status === "connected" &&
+    sellToken === "BNB" &&
+    Boolean(sellAmountBaseUnits && wallet.balanceWei && sellAmountBaseUnits > BigInt(wallet.balanceWei));
+  const hasExecutableQuote = swapQuote?.mode === "live-0x" || swapQuote?.mode === "live-pancake";
+  const decisionAllowsExecution = receipt.decision === "BUY" || receipt.decision === "SELL";
+  const executionModeAllowsSigning = constitution.executionMode === "quote-only";
+  const canRequestQuote =
+    wallet.status === "connected" &&
+    decisionAllowsExecution &&
+    executionModeAllowsSigning &&
+    sellToken !== buyToken &&
+    Boolean(sellAmountBaseUnits) &&
+    !amountExceedsBalance;
+  const canSignSwap = canRequestQuote && hasExecutableQuote && executionConfirmed;
+  const executionGateMessage = !executionModeAllowsSigning
+    ? "Switch execution mode to Quote Only before preparing wallet-signed swaps."
+    : !decisionAllowsExecution
+      ? `${receipt.decision.replace("_", " ")} decisions cannot request wallet signing.`
+      : amountExceedsBalance
+        ? "Amount exceeds the connected wallet's BNB balance."
+        : "Wallet-signed trading is constitution-gated and runs only on BNB Chain.";
   const quoteSummary = useMemo(() => {
     if (!swapQuote) {
       return null;
@@ -196,6 +238,7 @@ function App() {
   function clearPreparedTrade() {
     setSwapQuote(null);
     setTradeIntent({ status: "idle" });
+    setExecutionConfirmed(false);
   }
 
   async function refreshMarketFeed() {
@@ -260,13 +303,18 @@ function App() {
       const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
       const chainId = normalizeChainId(await window.ethereum.request({ method: "eth_chainId" }));
       const address = accounts[0] ?? "";
-      const balanceBnb = address ? formatBnbBalance(await window.ethereum.request({ method: "eth_getBalance", params: [address, "latest"] })) : undefined;
+      const balanceHex = address
+        ? await window.ethereum.request({ method: "eth_getBalance", params: [address, "latest"] })
+        : undefined;
+      const balanceWei = typeof balanceHex === "string" ? BigInt(balanceHex).toString() : undefined;
+      const balanceBnb = formatBnbBalance(balanceHex);
 
       setWallet({
         address,
         chainId,
         status: chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
         balanceBnb,
+        balanceWei,
       });
     } catch (error) {
       setWallet({
@@ -302,14 +350,15 @@ function App() {
 
     const address = wallet.address;
     const chainId = normalizeChainId(await window.ethereum.request({ method: "eth_chainId" }));
-    const balanceBnb = address
-      ? formatBnbBalance(await window.ethereum.request({ method: "eth_getBalance", params: [address, "latest"] }))
-      : undefined;
+    const balanceHex = address ? await window.ethereum.request({ method: "eth_getBalance", params: [address, "latest"] }) : undefined;
+    const balanceWei = typeof balanceHex === "string" ? BigInt(balanceHex).toString() : undefined;
+    const balanceBnb = formatBnbBalance(balanceHex);
     setWallet((current) => ({
       ...current,
       chainId,
       status: current.address && chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
       balanceBnb,
+      balanceWei,
     }));
   }
 
@@ -317,6 +366,7 @@ function App() {
     setWallet({ address: "", chainId: null, status: "disconnected" });
     setSwapQuote(null);
     setTradeIntent({ status: "idle" });
+    setExecutionConfirmed(false);
   }
 
   async function requestSwapQuote(type: "price" | "firm" = "price") {
@@ -335,6 +385,21 @@ function App() {
       return null;
     }
 
+    if (!decisionAllowsExecution || !executionModeAllowsSigning) {
+      setTradeIntent({ status: "blocked", error: executionGateMessage });
+      return null;
+    }
+
+    if (!sellAmountBaseUnits) {
+      setTradeIntent({ status: "failed", error: "Enter a valid positive amount." });
+      return null;
+    }
+
+    if (amountExceedsBalance) {
+      setTradeIntent({ status: "failed", error: "Amount exceeds the connected wallet's BNB balance." });
+      return null;
+    }
+
     setIsQuoting(true);
 
     try {
@@ -349,6 +414,9 @@ function App() {
       const quote = (await response.json()) as SwapQuote;
 
       setSwapQuote(quote);
+      if (type === "price") {
+        setExecutionConfirmed(false);
+      }
       setTradeIntent({
         status: quote.mode === "live-0x" || quote.mode === "live-pancake" ? "quote_ready" : quote.mode === "blocked" ? "blocked" : "failed",
         error: quote.mode === "live-0x" || quote.mode === "live-pancake" ? undefined : quote.message,
@@ -365,6 +433,11 @@ function App() {
   async function executeSwap() {
     if (!window.ethereum) {
       setTradeIntent({ status: "wallet_required", error: "No injected wallet found." });
+      return;
+    }
+
+    if (!canSignSwap) {
+      setTradeIntent({ status: "blocked", error: "Preview and confirm a live executable quote before signing." });
       return;
     }
 
@@ -425,15 +498,16 @@ function App() {
 
       void (async () => {
         const chainId = normalizeChainId(await window.ethereum?.request({ method: "eth_chainId" }));
-        const balanceBnb = formatBnbBalance(
-          await window.ethereum?.request({ method: "eth_getBalance", params: [address, "latest"] }),
-        );
+        const balanceHex = await window.ethereum?.request({ method: "eth_getBalance", params: [address, "latest"] });
+        const balanceWei = typeof balanceHex === "string" ? BigInt(balanceHex).toString() : undefined;
+        const balanceBnb = formatBnbBalance(balanceHex);
 
         setWallet({
           address,
           chainId,
           status: chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
           balanceBnb,
+          balanceWei,
         });
         setSwapQuote(null);
         setTradeIntent({ status: "idle" });
@@ -479,6 +553,27 @@ function App() {
     }
   }, [receipt.asset, receipt.decision, receipt.receiptHash, selectedAsset.price]);
 
+  const refreshBacktest = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({
+        asset: receipt.asset,
+        price: String(selectedAsset.price),
+        windowDays: "30",
+        maxPositionSize: String(constitution.maxPositionSize),
+        maxDrawdown: String(constitution.maxDrawdown),
+        minLiquidityScore: String(constitution.minLiquidityScore),
+        maxVolatility: String(constitution.maxVolatility),
+        stopLoss: String(constitution.stopLoss),
+        requirePositiveSentiment: String(constitution.requirePositiveSentiment),
+        slippageBps,
+      });
+      const response = await fetch(`/api/strategy/backtest?${params.toString()}`);
+      setBacktestReport((await response.json()) as StrategyBacktestReport);
+    } catch {
+      setBacktestReport(null);
+    }
+  }, [constitution, receipt.asset, selectedAsset.price, slippageBps]);
+
   useEffect(() => {
     const proofTimer = window.setTimeout(() => {
       void refreshSponsorProofs();
@@ -487,6 +582,14 @@ function App() {
     return () => window.clearTimeout(proofTimer);
   }, [refreshSponsorProofs]);
 
+  useEffect(() => {
+    const backtestTimer = window.setTimeout(() => {
+      void refreshBacktest();
+    }, 0);
+
+    return () => window.clearTimeout(backtestTimer);
+  }, [refreshBacktest]);
+
   function exportReceipt() {
     const payload = JSON.stringify(
       {
@@ -494,6 +597,7 @@ function App() {
         wallet,
         swapQuote,
         tradeIntent,
+        backtestReport,
         sponsorProofs: {
           trustWallet: trustProof,
           bnbAgent: bnbProof,
@@ -749,12 +853,44 @@ function App() {
             <div className="section-title">
               <BadgeCheck size={18} />
               <h2>Strategy Skill Output</h2>
+              {backtestReport ? <StatusPill tone="secure">{backtestReport.mode}</StatusPill> : null}
             </div>
             <ol className="rules-list">
               {receipt.strategyRules.map((rule) => (
                 <li key={rule}>{rule}</li>
               ))}
             </ol>
+            {backtestReport ? (
+              <div className="backtest-card">
+                <div className="backtest-head">
+                  <strong>{backtestReport.windowDays}-day replay</strong>
+                  <code>{backtestReport.proofId}</code>
+                </div>
+                <div className="backtest-metrics">
+                  <span>
+                    <small>Return</small>
+                    {backtestReport.metrics.totalReturnPct}%
+                  </span>
+                  <span>
+                    <small>Max drawdown</small>
+                    {backtestReport.metrics.maxDrawdownPct}%
+                  </span>
+                  <span>
+                    <small>Win rate</small>
+                    {backtestReport.metrics.winRatePct}%
+                  </span>
+                  <span>
+                    <small>Trades</small>
+                    {backtestReport.metrics.trades}
+                  </span>
+                </div>
+                <p>
+                  Assumes ${backtestReport.assumptions.startingCapitalUsd.toLocaleString()} capital,{" "}
+                  {backtestReport.assumptions.feeBps} bps fee, {backtestReport.assumptions.slippageBps} bps slippage,
+                  and {backtestReport.metrics.ruleAdherencePct}% rule adherence.
+                </p>
+              </div>
+            ) : null}
           </article>
 
           <article className="panel">
@@ -767,10 +903,13 @@ function App() {
                 <strong>{wallet.status === "connected" ? "Wallet ready" : wallet.status.replace("-", " ")}</strong>
                 <span>
                   {wallet.status === "connected"
-                    ? `${shortAddress(wallet.address)} · ${wallet.balanceBnb ?? "0"} BNB · BNB Chain`
+                    ? `${shortAddress(wallet.address)} / ${wallet.balanceBnb ?? "0"} BNB / BNB Chain`
                     : wallet.error ?? "Connect a Trust Wallet-compatible injected wallet to request live quotes."}
                 </span>
               </div>
+              {amountExceedsBalance ? (
+                <div className="trade-warning">Amount exceeds the connected wallet's BNB balance.</div>
+              ) : null}
               <div className="trade-row">
                 <label>
                   Sell
@@ -839,7 +978,7 @@ function App() {
                   <button className="secondary-action" onClick={() => void requestSwapQuote("price")} disabled={!canRequestQuote || isQuoting}>
                     {isQuoting ? "Quoting" : "Preview Quote"}
                   </button>
-                  <button className="primary-action" onClick={executeSwap} disabled={!canRequestQuote || isSigning}>
+                  <button className="primary-action" onClick={executeSwap} disabled={!canSignSwap || isSigning}>
                     {isSigning ? "Signing" : "Sign Swap"}
                   </button>
                 </div>
@@ -851,7 +990,7 @@ function App() {
                     View submitted transaction
                   </a>
                 ) : (
-                  <p>{tradeIntent.error ?? "Wallet-signed trading is constitution-gated and runs only on BNB Chain."}</p>
+                  <p>{tradeIntent.error ?? executionGateMessage}</p>
                 )}
               </div>
               {swapQuote ? (
@@ -877,6 +1016,16 @@ function App() {
                         </span>
                       ) : null}
                     </div>
+                  ) : null}
+                  {hasExecutableQuote ? (
+                    <label className="execution-confirmation">
+                      <input
+                        type="checkbox"
+                        checked={executionConfirmed}
+                        onChange={(event) => setExecutionConfirmed(event.target.checked)}
+                      />
+                      <span>I reviewed this live quote and want my wallet to sign the BNB Chain swap.</span>
+                    </label>
                   ) : null}
                   <code>{swapQuote.proofId}</code>
                 </div>

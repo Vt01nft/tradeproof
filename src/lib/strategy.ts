@@ -164,11 +164,11 @@ export function generateReceipt(signal: MarketSignal, constitution: Constitution
       `Attach a ${constitution.stopLoss}% stop-loss to every approved entry.`,
     ],
     cmcSources: [
-      "quotes/latest",
-      "market-pair liquidity",
-      "technical momentum",
-      "sentiment and news risk",
-      "derivatives pressure",
+      "CMC quotes/latest",
+      "CMC fear-and-greed/latest",
+      "derived liquidity score",
+      "derived momentum score",
+      "derived risk pressure",
     ],
     trustWalletAction:
       constitution.executionMode === "quote-only"

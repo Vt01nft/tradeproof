@@ -186,6 +186,207 @@ export function getIntegrationHealth() {
   };
 }
 
+const BACKTEST_BASE_PRICE = {
+  BNB: 643.18,
+  CAKE: 2.91,
+  USDT: 1,
+};
+
+function decideBacktest(signal, constitution) {
+  const riskChecks = [
+    signal.liquidityScore >= constitution.minLiquidityScore,
+    signal.volatility <= constitution.maxVolatility,
+    signal.volatility + Math.max(signal.newsRisk / 12, 0) <= constitution.maxDrawdown,
+    constitution.maxPositionSize <= 15,
+    constitution.requirePositiveSentiment ? signal.sentiment >= 50 : true,
+    signal.newsRisk <= 42,
+  ];
+  const allClear = riskChecks.every(Boolean);
+
+  if (signal.asset === "USDT") {
+    return { decision: "HOLD", ruleAdherence: 100 };
+  }
+
+  if (!allClear) {
+    return {
+      decision: "NO_TRADE",
+      ruleAdherence: Math.round((riskChecks.filter(Boolean).length / riskChecks.length) * 100),
+    };
+  }
+
+  if (signal.rsi > 70 || signal.fundingPressure > 0.35) {
+    return { decision: "HOLD", ruleAdherence: 92 };
+  }
+
+  if (signal.sentiment > 58 && signal.change24h > 0.5 && signal.volumeChange24h > 8) {
+    return { decision: "BUY", ruleAdherence: 100 };
+  }
+
+  if (signal.sentiment < 40 && signal.change24h < -2) {
+    return { decision: "SELL", ruleAdherence: 100 };
+  }
+
+  return { decision: "HOLD", ruleAdherence: 88 };
+}
+
+function buildReplaySignal(asset, price, previousPrice, dayIndex) {
+  const change24h = previousPrice > 0 ? ((price - previousPrice) / previousPrice) * 100 : 0;
+  const cycle = Math.sin(dayIndex * 0.58);
+  const volumeChange24h = 14 + cycle * 22 + Math.max(change24h, 0) * 4;
+  const volatility = clamp(Math.abs(change24h) * 1.45 + Math.abs(Math.sin(dayIndex * 0.31)) * 2.4, 0.2, 9.8);
+  const sentiment = clamp(Math.round(54 + change24h * 5 + cycle * 12), 15, 92);
+  const rsi = clamp(Math.round(52 + change24h * 4.2 + Math.sin(dayIndex * 0.42) * 14), 18, 86);
+
+  return {
+    asset,
+    price,
+    change24h,
+    volumeChange24h,
+    sentiment,
+    rsi,
+    volatility: Number(volatility.toFixed(2)),
+    liquidityScore: asset === "BNB" ? 91 : asset === "CAKE" ? 76 : 99,
+    fundingPressure: Number(clamp(Math.abs(change24h) / 18 + Math.max(volumeChange24h, 0) / 240, 0.01, 0.55).toFixed(2)),
+    newsRisk: clamp(Math.round(22 + volatility * 2.1 - sentiment / 12), 5, 68),
+    dataSource: "backtest-replay",
+  };
+}
+
+export function buildStrategyBacktest(searchParams) {
+  const asset = String(searchParams.get("asset") ?? "BNB").toUpperCase();
+
+  if (!SYMBOLS.includes(asset)) {
+    throw new Error("Unsupported asset for strategy backtest.");
+  }
+
+  const windowDays = Math.min(Math.max(Math.round(toNumber(searchParams.get("windowDays"), 30)), 14), 90);
+  const constitution = {
+    maxPositionSize: Math.min(Math.max(toNumber(searchParams.get("maxPositionSize"), 12), 1), 25),
+    maxDrawdown: Math.min(Math.max(toNumber(searchParams.get("maxDrawdown"), 8), 1), 30),
+    minLiquidityScore: Math.min(Math.max(toNumber(searchParams.get("minLiquidityScore"), 72), 1), 99),
+    maxVolatility: Math.min(Math.max(toNumber(searchParams.get("maxVolatility"), 7), 1), 20),
+    stopLoss: Math.min(Math.max(toNumber(searchParams.get("stopLoss"), 4.5), 0.5), 25),
+    requirePositiveSentiment: searchParams.get("requirePositiveSentiment") !== "false",
+  };
+  const feeBps = 25;
+  const slippageBps = Math.min(Math.max(toNumber(searchParams.get("slippageBps"), 75), 10), 500);
+  const startingCapitalUsd = 10000;
+  const createdAt = new Date().toISOString();
+  const today = new Date(`${createdAt.slice(0, 10)}T00:00:00.000Z`);
+  let price = searchParams.has("price")
+    ? toNumber(searchParams.get("price"), BACKTEST_BASE_PRICE[asset] ?? 1)
+    : BACKTEST_BASE_PRICE[asset] ?? 1;
+  let previousPrice = price;
+  let equity = startingCapitalUsd;
+  let peakEquity = startingCapitalUsd;
+  let positionPct = 0;
+  let entryPrice = 0;
+  let trades = 0;
+  let wins = 0;
+  let losses = 0;
+  const windows = [];
+
+  for (let index = windowDays - 1; index >= 0; index -= 1) {
+    const dayNumber = windowDays - index;
+    const drift = asset === "USDT" ? 0 : Math.sin(dayNumber * 0.47) * 0.018 + Math.cos(dayNumber * 0.19) * 0.009;
+    previousPrice = price;
+    price = Number(Math.max(0.0001, price * (1 + drift)).toFixed(asset === "BNB" ? 2 : 5));
+
+    const signal = buildReplaySignal(asset, price, previousPrice, dayNumber);
+    const { decision, ruleAdherence } = decideBacktest(signal, constitution);
+    const previousEquity = equity;
+
+    if (positionPct > 0) {
+      const markReturn = previousPrice > 0 ? ((price - previousPrice) / previousPrice) * (positionPct / 100) : 0;
+      equity *= 1 + markReturn;
+
+      if (entryPrice > 0 && ((price - entryPrice) / entryPrice) * 100 <= -constitution.stopLoss) {
+        losses += 1;
+        positionPct = 0;
+        equity *= 1 - (feeBps + slippageBps) / 10000;
+      }
+    }
+
+    if (decision === "BUY" && positionPct === 0) {
+      positionPct = constitution.maxPositionSize;
+      entryPrice = price;
+      trades += 1;
+      equity *= 1 - (feeBps + slippageBps) / 10000;
+    }
+
+    if ((decision === "SELL" || decision === "NO_TRADE") && positionPct > 0) {
+      if (equity >= previousEquity) {
+        wins += 1;
+      } else {
+        losses += 1;
+      }
+
+      positionPct = 0;
+      equity *= 1 - (feeBps + slippageBps) / 10000;
+    }
+
+    peakEquity = Math.max(peakEquity, equity);
+    const drawdownPct = peakEquity > 0 ? ((peakEquity - equity) / peakEquity) * 100 : 0;
+    const day = new Date(today);
+    day.setUTCDate(today.getUTCDate() - index);
+
+    windows.push({
+      day: day.toISOString().slice(0, 10),
+      price,
+      decision,
+      positionPct,
+      pnlPct: Number((((equity - startingCapitalUsd) / startingCapitalUsd) * 100).toFixed(2)),
+      drawdownPct: Number(drawdownPct.toFixed(2)),
+      ruleAdherence,
+    });
+  }
+
+  const closedTrades = wins + losses;
+  const ruleAdherencePct = windows.length
+    ? Math.round(windows.reduce((sum, item) => sum + item.ruleAdherence, 0) / windows.length)
+    : 0;
+  const maxDrawdownPct = windows.reduce((max, item) => Math.max(max, item.drawdownPct), 0);
+  const proofBase = JSON.stringify({ asset, windowDays, constitution, feeBps, slippageBps, windows });
+
+  return {
+    mode: "backtest-ready",
+    asset,
+    windowDays,
+    assumptions: {
+      startingCapitalUsd,
+      feeBps,
+      slippageBps,
+      maxPositionPct: constitution.maxPositionSize,
+      stopLossPct: constitution.stopLoss,
+    },
+    metrics: {
+      totalReturnPct: Number((((equity - startingCapitalUsd) / startingCapitalUsd) * 100).toFixed(2)),
+      maxDrawdownPct: Number(maxDrawdownPct.toFixed(2)),
+      winRatePct: closedTrades ? Math.round((wins / closedTrades) * 100) : 0,
+      trades,
+      ruleAdherencePct,
+    },
+    windows,
+    inputSchema: {
+      asset: "BNB | CAKE | USDT",
+      windowDays: "14..90",
+      maxPositionSize: "number percent",
+      maxDrawdown: "number percent",
+      minLiquidityScore: "1..99",
+      maxVolatility: "number percent",
+      stopLoss: "number percent",
+      slippageBps: "basis points",
+    },
+    outputSchema: {
+      metrics: "return, drawdown, win rate, trade count, rule adherence",
+      windows: "daily price, decision, position, pnl, drawdown, rule adherence",
+      proofId: "deterministic proof hash for the replay payload",
+    },
+    proofId: proofHash(proofBase),
+    createdAt,
+  };
+}
+
 function parseUnits(amount, decimals) {
   const value = String(amount ?? "0").trim();
 

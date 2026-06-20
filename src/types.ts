@@ -53,6 +53,41 @@ export interface TradeReceipt {
   receiptHash: string;
 }
 
+export interface BacktestWindow {
+  day: string;
+  price: number;
+  decision: Decision;
+  positionPct: number;
+  pnlPct: number;
+  drawdownPct: number;
+  ruleAdherence: number;
+}
+
+export interface StrategyBacktestReport {
+  mode: "backtest-ready" | "fallback";
+  asset: AssetSymbol;
+  windowDays: number;
+  assumptions: {
+    startingCapitalUsd: number;
+    feeBps: number;
+    slippageBps: number;
+    maxPositionPct: number;
+    stopLossPct: number;
+  };
+  metrics: {
+    totalReturnPct: number;
+    maxDrawdownPct: number;
+    winRatePct: number;
+    trades: number;
+    ruleAdherencePct: number;
+  };
+  windows: BacktestWindow[];
+  inputSchema: Record<string, string>;
+  outputSchema: Record<string, string>;
+  proofId: string;
+  createdAt: string;
+}
+
 export interface SponsorIntegration {
   name: string;
   status: SponsorStatus;
@@ -108,6 +143,7 @@ export interface WalletState {
   chainId: number | null;
   status: "disconnected" | "connecting" | "connected" | "wrong-chain" | "unavailable";
   balanceBnb?: string;
+  balanceWei?: string;
   error?: string;
 }
 

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import {
   buildBnbAgentProfile,
   buildMarketFeed,
+  buildStrategyBacktest,
   buildSwapQuote,
   buildTrustQuoteProof,
   getIntegrationHealth,
@@ -33,6 +34,15 @@ createServer(async (request, response) => {
 
   if (url.pathname === "/api/agent/profile") {
     sendJson(response, 200, buildBnbAgentProfile(url.searchParams));
+    return;
+  }
+
+  if (url.pathname === "/api/strategy/backtest") {
+    try {
+      sendJson(response, 200, buildStrategyBacktest(url.searchParams));
+    } catch (error) {
+      sendJson(response, 400, { mode: "fallback", message: error instanceof Error ? error.message : "Backtest failed." });
+    }
     return;
   }
 
