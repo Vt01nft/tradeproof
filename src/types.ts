@@ -107,6 +107,7 @@ export interface WalletState {
   address: string;
   chainId: number | null;
   status: "disconnected" | "connecting" | "connected" | "wrong-chain" | "unavailable";
+  balanceBnb?: string;
   error?: string;
 }
 

@@ -45,6 +45,7 @@ The local demo includes:
 - A trade receipt with strategy rules, CMC source labels, Trust Wallet action, BNB agent metadata, and receipt hash.
 - A self-custody trading desk that connects an injected wallet and prepares wallet-signed BNB Chain swaps.
 - Live PancakeSwap V2 quotes for native BNB to USDT/CAKE without backend custody.
+- Wallet balance display, adjustable slippage, readable expected/minimum receive amounts, and BscScan transaction links.
 - Optional 0x aggregator quote support when `ZEROX_API_KEY` is configured.
 
 ## Sponsor Architecture
@@ -150,9 +151,11 @@ TradeProof now supports a real self-custody MVP path:
 2. Switch to BNB Smart Chain when prompted.
 3. Use Demo Mode or a live strategy state that approves execution.
 4. Sell native `BNB` into `USDT` or `CAKE`.
-5. Preview a live PancakeSwap quote.
-6. Click Sign Swap.
-7. The connected wallet signs the transaction. TradeProof never receives private keys.
+5. Set max slippage and preview a live PancakeSwap quote.
+6. Review expected and minimum received amounts.
+7. Click Sign Swap.
+8. The connected wallet signs the transaction. TradeProof never receives private keys.
+9. Open the submitted transaction on BscScan.
 
 The no-extra-key trading path supports native BNB sells through PancakeSwap V2. Add `ZEROX_API_KEY` to enable broader 0x aggregator routes for ERC-20 sell paths later.
 

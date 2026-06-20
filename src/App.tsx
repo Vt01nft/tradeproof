@@ -39,6 +39,11 @@ declare global {
 
 const BNB_CHAIN_ID = 56;
 const TRADE_TOKENS: TradeTokenSymbol[] = ["BNB", "USDT", "CAKE"];
+const TOKEN_DECIMALS: Record<TradeTokenSymbol, number> = {
+  BNB: 18,
+  USDT: 18,
+  CAKE: 18,
+};
 
 function Logo() {
   return (
@@ -92,6 +97,38 @@ function normalizeChainId(chainId: unknown) {
   return typeof chainId === "number" ? chainId : null;
 }
 
+function formatBaseUnits(value: string | undefined, decimals: number, maximumFractionDigits = 6) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    const base = BigInt(value);
+    const scale = 10n ** BigInt(decimals);
+    const whole = base / scale;
+    const fraction = base % scale;
+
+    if (fraction === 0n || maximumFractionDigits === 0) {
+      return whole.toLocaleString();
+    }
+
+    const rawFraction = fraction.toString().padStart(decimals, "0").slice(0, maximumFractionDigits);
+    const cleanFraction = rawFraction.replace(/0+$/, "");
+
+    return cleanFraction ? `${whole.toLocaleString()}.${cleanFraction}` : whole.toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function formatBnbBalance(balanceHex: unknown) {
+  if (typeof balanceHex !== "string") {
+    return undefined;
+  }
+
+  return formatBaseUnits(BigInt(balanceHex).toString(), 18, 5);
+}
+
 function App() {
   const [marketFeed, setMarketFeed] = useState<MarketFeed>({
     mode: "fallback",
@@ -113,6 +150,7 @@ function App() {
   const [sellToken, setSellToken] = useState<TradeTokenSymbol>("BNB");
   const [buyToken, setBuyToken] = useState<TradeTokenSymbol>("USDT");
   const [sellAmount, setSellAmount] = useState("0.01");
+  const [slippageBps, setSlippageBps] = useState("75");
   const [swapQuote, setSwapQuote] = useState<SwapQuote | null>(null);
   const [tradeIntent, setTradeIntent] = useState<TradeIntent>({ status: "idle" });
   const [isQuoting, setIsQuoting] = useState(false);
@@ -139,6 +177,26 @@ function App() {
   const receipt = useMemo(() => generateReceipt(selectedAsset, constitution), [selectedAsset, constitution]);
   const approvedCount = receipt.courtVotes.filter((vote) => vote.vote === "approve").length;
   const canRequestQuote = wallet.status === "connected" && receipt.decision !== "NO_TRADE" && sellToken !== buyToken;
+  const quoteSummary = useMemo(() => {
+    if (!swapQuote) {
+      return null;
+    }
+
+    const sellFormatted = `${formatBaseUnits(swapQuote.sellAmountBaseUnits, TOKEN_DECIMALS[swapQuote.sellToken], 6)} ${swapQuote.sellToken}`;
+    const buyFormatted = swapQuote.buyAmount
+      ? `${formatBaseUnits(swapQuote.buyAmount, TOKEN_DECIMALS[swapQuote.buyToken], 6)} ${swapQuote.buyToken}`
+      : "";
+    const minBuyFormatted = swapQuote.minBuyAmount
+      ? `${formatBaseUnits(swapQuote.minBuyAmount, TOKEN_DECIMALS[swapQuote.buyToken], 6)} ${swapQuote.buyToken}`
+      : "";
+
+    return { sellFormatted, buyFormatted, minBuyFormatted };
+  }, [swapQuote]);
+
+  function clearPreparedTrade() {
+    setSwapQuote(null);
+    setTradeIntent({ status: "idle" });
+  }
 
   async function refreshMarketFeed() {
     const requestId = feedRequestRef.current + 1;
@@ -187,6 +245,7 @@ function App() {
       assets: marketScenarios,
     });
     setSelectedAsset(marketScenarios[0]);
+    clearPreparedTrade();
   }
 
   async function connectWallet() {
@@ -201,11 +260,13 @@ function App() {
       const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
       const chainId = normalizeChainId(await window.ethereum.request({ method: "eth_chainId" }));
       const address = accounts[0] ?? "";
+      const balanceBnb = address ? formatBnbBalance(await window.ethereum.request({ method: "eth_getBalance", params: [address, "latest"] })) : undefined;
 
       setWallet({
         address,
         chainId,
         status: chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
+        balanceBnb,
       });
     } catch (error) {
       setWallet({
@@ -239,11 +300,16 @@ function App() {
       });
     }
 
+    const address = wallet.address;
     const chainId = normalizeChainId(await window.ethereum.request({ method: "eth_chainId" }));
+    const balanceBnb = address
+      ? formatBnbBalance(await window.ethereum.request({ method: "eth_getBalance", params: [address, "latest"] }))
+      : undefined;
     setWallet((current) => ({
       ...current,
       chainId,
       status: current.address && chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
+      balanceBnb,
     }));
   }
 
@@ -277,7 +343,7 @@ function App() {
         buyToken,
         sellAmount,
         taker: wallet.address,
-        slippageBps: "75",
+        slippageBps,
       });
       const response = await fetch(`/api/quote/${type}?${params.toString()}`);
       const quote = (await response.json()) as SwapQuote;
@@ -341,6 +407,61 @@ function App() {
     }, 0);
 
     return () => window.clearTimeout(refreshTimer);
+  }, []);
+
+  useEffect(() => {
+    if (!window.ethereum?.on) {
+      return undefined;
+    }
+
+    const handleAccountsChanged = (...args: unknown[]) => {
+      const accounts = Array.isArray(args[0]) ? (args[0] as string[]) : [];
+      const address = accounts[0] ?? "";
+
+      if (!address) {
+        disconnectWallet();
+        return;
+      }
+
+      void (async () => {
+        const chainId = normalizeChainId(await window.ethereum?.request({ method: "eth_chainId" }));
+        const balanceBnb = formatBnbBalance(
+          await window.ethereum?.request({ method: "eth_getBalance", params: [address, "latest"] }),
+        );
+
+        setWallet({
+          address,
+          chainId,
+          status: chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
+          balanceBnb,
+        });
+        setSwapQuote(null);
+        setTradeIntent({ status: "idle" });
+      })();
+    };
+
+    const handleChainChanged = (...args: unknown[]) => {
+      const chainId = normalizeChainId(args[0]);
+
+      void (async () => {
+        setWallet((current) => ({
+          ...current,
+          chainId,
+          status: current.address && chainId === BNB_CHAIN_ID ? "connected" : "wrong-chain",
+        }));
+
+        setSwapQuote(null);
+        setTradeIntent({ status: "idle" });
+      })();
+    };
+
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    window.ethereum.on("chainChanged", handleChainChanged);
+
+    return () => {
+      window.ethereum?.removeListener?.("accountsChanged", handleAccountsChanged);
+      window.ethereum?.removeListener?.("chainChanged", handleChainChanged);
+    };
   }, []);
 
   const refreshSponsorProofs = useCallback(async () => {
@@ -415,7 +536,10 @@ function App() {
               max="18"
               value={constitution.maxPositionSize}
               onChange={(event) =>
-                setConstitution({ ...constitution, maxPositionSize: Number(event.target.value) })
+                {
+                  setConstitution({ ...constitution, maxPositionSize: Number(event.target.value) });
+                  clearPreparedTrade();
+                }
               }
             />
             <span>{constitution.maxPositionSize}%</span>
@@ -428,7 +552,10 @@ function App() {
               max="11"
               step="0.5"
               value={constitution.maxVolatility}
-              onChange={(event) => setConstitution({ ...constitution, maxVolatility: Number(event.target.value) })}
+              onChange={(event) => {
+                setConstitution({ ...constitution, maxVolatility: Number(event.target.value) });
+                clearPreparedTrade();
+              }}
             />
             <span>{constitution.maxVolatility}%</span>
           </label>
@@ -440,7 +567,10 @@ function App() {
               max="95"
               value={constitution.minLiquidityScore}
               onChange={(event) =>
-                setConstitution({ ...constitution, minLiquidityScore: Number(event.target.value) })
+                {
+                  setConstitution({ ...constitution, minLiquidityScore: Number(event.target.value) });
+                  clearPreparedTrade();
+                }
               }
             />
             <span>{constitution.minLiquidityScore}</span>
@@ -450,7 +580,10 @@ function App() {
               <button
                 className={constitution.executionMode === mode ? "active" : ""}
                 key={mode}
-                onClick={() => setConstitution({ ...constitution, executionMode: mode })}
+                onClick={() => {
+                  setConstitution({ ...constitution, executionMode: mode });
+                  clearPreparedTrade();
+                }}
               >
                 {mode.replace("-", " ")}
               </button>
@@ -532,7 +665,10 @@ function App() {
             <button
               className={scenario.asset === selectedAsset.asset ? "active" : ""}
               key={scenario.asset}
-              onClick={() => setSelectedAsset(scenario)}
+              onClick={() => {
+                setSelectedAsset(scenario);
+                clearPreparedTrade();
+              }}
             >
               <span>{scenario.asset}</span>
               <small>{scenario.change24h > 0 ? "+" : ""}{scenario.change24h.toFixed(2)}%</small>
@@ -627,10 +763,24 @@ function App() {
               <h2>Trading Desk</h2>
             </div>
             <div className="trade-desk">
+              <div className="wallet-strip">
+                <strong>{wallet.status === "connected" ? "Wallet ready" : wallet.status.replace("-", " ")}</strong>
+                <span>
+                  {wallet.status === "connected"
+                    ? `${shortAddress(wallet.address)} · ${wallet.balanceBnb ?? "0"} BNB · BNB Chain`
+                    : wallet.error ?? "Connect a Trust Wallet-compatible injected wallet to request live quotes."}
+                </span>
+              </div>
               <div className="trade-row">
                 <label>
                   Sell
-                  <select value={sellToken} onChange={(event) => setSellToken(event.target.value as TradeTokenSymbol)}>
+                  <select
+                    value={sellToken}
+                    onChange={(event) => {
+                      setSellToken(event.target.value as TradeTokenSymbol);
+                      clearPreparedTrade();
+                    }}
+                  >
                     {TRADE_TOKENS.map((token) => (
                       <option key={token} value={token}>
                         {token}
@@ -640,7 +790,13 @@ function App() {
                 </label>
                 <label>
                   Buy
-                  <select value={buyToken} onChange={(event) => setBuyToken(event.target.value as TradeTokenSymbol)}>
+                  <select
+                    value={buyToken}
+                    onChange={(event) => {
+                      setBuyToken(event.target.value as TradeTokenSymbol);
+                      clearPreparedTrade();
+                    }}
+                  >
                     {TRADE_TOKENS.map((token) => (
                       <option key={token} value={token}>
                         {token}
@@ -651,7 +807,28 @@ function App() {
               </div>
               <label>
                 Amount
-                <input value={sellAmount} onChange={(event) => setSellAmount(event.target.value)} />
+                <input
+                  value={sellAmount}
+                  onChange={(event) => {
+                    setSellAmount(event.target.value);
+                    clearPreparedTrade();
+                  }}
+                />
+              </label>
+              <label>
+                Max slippage
+                <select
+                  value={slippageBps}
+                  onChange={(event) => {
+                    setSlippageBps(event.target.value);
+                    clearPreparedTrade();
+                  }}
+                >
+                  <option value="50">0.50%</option>
+                  <option value="75">0.75%</option>
+                  <option value="100">1.00%</option>
+                  <option value="150">1.50%</option>
+                </select>
               </label>
               {wallet.status === "wrong-chain" ? (
                 <button className="primary-action full-width" onClick={switchToBnbChain}>
@@ -669,19 +846,39 @@ function App() {
               )}
               <div className={`intent ${tradeIntent.status}`}>
                 <strong>{tradeIntent.status.replace("_", " ")}</strong>
-                <p>
-                  {tradeIntent.txHash
-                    ? `Submitted: ${tradeIntent.txHash}`
-                    : tradeIntent.error ?? "Wallet-signed trading is constitution-gated and runs only on BNB Chain."}
-                </p>
+                {tradeIntent.txHash ? (
+                  <a href={`https://bscscan.com/tx/${tradeIntent.txHash}`} target="_blank" rel="noreferrer">
+                    View submitted transaction
+                  </a>
+                ) : (
+                  <p>{tradeIntent.error ?? "Wallet-signed trading is constitution-gated and runs only on BNB Chain."}</p>
+                )}
               </div>
               {swapQuote ? (
                 <div className="quote-preview">
                   <strong>{swapQuote.mode === "live-pancake" ? "PancakeSwap quote" : swapQuote.mode === "live-0x" ? "0x quote" : "Quote status"}</strong>
                   <p>{swapQuote.message}</p>
+                  {quoteSummary ? (
+                    <div className="quote-grid">
+                      <span>
+                        <small>Sell</small>
+                        {quoteSummary.sellFormatted}
+                      </span>
+                      {quoteSummary.buyFormatted ? (
+                        <span>
+                          <small>Expected buy</small>
+                          {quoteSummary.buyFormatted}
+                        </span>
+                      ) : null}
+                      {quoteSummary.minBuyFormatted ? (
+                        <span>
+                          <small>Minimum received</small>
+                          {quoteSummary.minBuyFormatted}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <code>{swapQuote.proofId}</code>
-                  {swapQuote.buyAmount ? <span>Buy amount: {swapQuote.buyAmount}</span> : null}
-                  {swapQuote.minBuyAmount ? <span>Min buy: {swapQuote.minBuyAmount}</span> : null}
                 </div>
               ) : null}
             </div>
